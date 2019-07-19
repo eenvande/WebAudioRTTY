@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=Edge">
+<meta name="author" content="Erwin van Doorn">
+<meta name="robots" content="index, follow">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTTY</title>
+<style>
+body {
+	background: white;
+	color: #333;
+	font-family: "Helvetica Neue", Arial, sans-serif;
+	font-size: 14px;
+	line-height: 24px;
+}
+
+input[type="text"] {
+		width: 400px;
+}
+
+#error {
+	color: #CC0000;
+	font-weight: bold;
+}
+</style>
+</head>
+<body>
+<h3 id="title">Web Audio RTTY</h3>
+
+<input id="text01" type="text" placeholder="Type something and press PLAY" value="The quick brown fox jumps over the lazy dog." onkeypress="return text01_onKeyPress(event)" />
+<input id="button01" type="button" value="PLAY &#9835;" onclick="button01_onClick()" />
+
+<script>
+var ALLOWED_CHARS = "QWERTYUIOPASDFGHJKLZXCVBNM qwertyuiopasdfghjklzxcvbnm1234567890-!&#'()\"/:;?,.";
+
+// https://en.wikipedia.org/wiki/Baudot_code
+var LETTER_ARRAY = "nEfA SIUrDRJNFCKTZLWHYPQOBGsMXV*";
+var FIGURE_ARRAY = "n3f- b87rw4',!:(5\")2#6019?&*./;s";
+// b = BEL, f = LF, n = NULL, r = CR, s = Shift, w = WRU?
+
+var BAUDOT_ARRAY = LETTER_ARRAY.concat(FIGURE_ARRAY);
+
+var LETTERS = 1;
+var FIGURES = 2;
+
+var BAUD_RATE = 45.45;
+var MARK_FREQ = 2125;
+var SPACE_FREQ = 2295; // i.e. shift = 170 Hz
+
+var bitTime = 1 / BAUD_RATE; // 45.45 baud = 22 ms
+var stopBitTime = 2 * bitTime; // Two bit times, in the case of Amateur RTTY
+
+var AudioContext = window.AudioContext || window.webkitAudioContext || false;
+
+var ctx = null;
+var vco = null;
+var vca = null;
+
+var shift = Math.abs(MARK_FREQ - SPACE_FREQ);
+document.title = "RTTY "+BAUD_RATE+" baud / "+shift+" Hz";
+document.querySelector("#title").textContent = document.title;
+
+if (AudioContext) {
+	ctx = new AudioContext();
+
+	/* VCO */
+	vco = ctx.createOscillator();
+	vco.frequency.value = MARK_FREQ;
+	vco.start(0);
+
+	/* VCA */
+	vca = ctx.createGain();
+	vca.gain.value = 0;
+
+	/* Connections */
+	vco.connect(vca);
+	vca.connect(ctx.destination);
+} else {
+	var node = document.createTextNode("Sorry, your browser does not support the Web Audio API.");
+
+	var elem = document.createElement("P");
+	elem.setAttribute("id", "error");
+	elem.appendChild(node);
+
+	document.body.appendChild(elem);
+}
+
+function text01_onKeyPress(e) {
+	var k = document.all ? parseInt(e.keyCode) : parseInt(e.which);
+	if (k == 13) {
+		button01_onClick();
+	}
+	if (k != 13 && k != 8 && k != 0) {
+		if (e.ctrlKey == false && e.altKey == false) {
+			return (ALLOWED_CHARS.indexOf(String.fromCharCode(k)) != -1);
+		} else {
+			return true;
+		}
+	}
+	return true;
+}
+
+function button01_onClick() {
+	var text = document.querySelector("#text01").value;
+	if (text.trim() == "") {
+		return;
+	}
+	if (!AudioContext) {
+		return;
+	}
+	processText(text);
+}
+
+function processText(text) {
+	text = text.toUpperCase();
+	var activeState = 0;
+	var t = ctx.currentTime;
+	vca.gain.setValueAtTime(1.0, t);
+	t = mark(t, 0.5);
+	for (var i = 0; i < text.length; i++) {
+		var ch = text[i];
+		if (ch == "*") {
+			// Should not happen
+			continue;
+		}
+		var index = BAUDOT_ARRAY.indexOf(ch);
+		if (index >= 0) {
+			var state = (index < 32) ? LETTERS : FIGURES;
+			if (state != activeState) {
+				activeState = state;
+				if (activeState == LETTERS) {
+					// Switch to letters (Shift off)
+					t = processBits(t, 31);
+				} else {
+					// Switch to figures (Shift on)
+					t = processBits(t, 27);
+				}
+			}
+			t = processBits(t, index % 32);
+		}
+	}
+	t = mark(t, 0.5);
+	vca.gain.setValueAtTime(0.0, t);
+}
+
+function processBits(t, value) {
+	// Start bit
+	t = space(t, bitTime);
+	for (var i = 0; i < 5; i++) {
+		// Least Significant Bit First
+		if (value & (1 << i)) {
+			t = mark(t, bitTime);
+		} else {
+			t = space(t, bitTime);
+		}
+	}
+	// Stop bit
+	t = mark(t, stopBitTime);
+	return t;
+}
+
+function mark(t, duration) {
+	vco.frequency.setValueAtTime(MARK_FREQ, t);
+	return t + duration;
+}
+
+function space(t, duration) {
+	vco.frequency.setValueAtTime(SPACE_FREQ, t);
+	return t + duration;
+}
+</script>
+
+</body>
+</html>
